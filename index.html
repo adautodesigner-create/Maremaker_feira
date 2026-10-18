@@ -21,6 +21,19 @@
 <div id="message"></div>
 <div class="panel" style="margin-top:20px"><h3>Histórico de vendas</h3><div class="historywrap"><table><thead><tr><th>Data</th><th>Tipo</th><th>Produtos</th><th>Qtd.</th><th>Total</th></tr></thead><tbody id="history"></tbody></table></div><p id="noHistory" class="muted">Nenhuma venda registrada.</p></div>
 <div class="panel"><h3>Ajustar estoque sem registrar venda</h3><p class="sub">Use para correções ou reposição. Essa ação não altera o faturamento.</p><div class="formgrid"><div class="field"><label>Produto</label><select id="adjustProduct"></select></div><div class="field"><label>Alteração (ex.: -1 ou 3)</label><input id="adjustQty" type="number" step="1" value="-1"></div><div class="field"><label>Motivo (opcional)</label><input id="adjustNote" placeholder="Correção / reposição"></div></div><div class="actions"><button onclick="adjustStock()">Salvar ajuste</button></div></div>
+<div class="panel" style="margin-top:16px">
+<h3>Cadastrar novo produto</h3>
+<p class="sub">Adicione um item ao catálogo e registre a quantidade física disponível. O novo produto será salvo no banco de dados.</p>
+<div class="formgrid">
+<div class="field"><label for="newName">Nome do produto</label><input id="newName" placeholder="Ex.: Espada medieval"></div>
+<div class="field"><label for="newCategory">Categoria</label><select id="newCategory"><option value="Brinquedo">Brinquedo</option><option value="Chaveiro">Chaveiro</option><option value="Decoração">Decoração</option><option value="Sensorial">Sensorial</option></select></div>
+<div class="field"><label for="newType">Tipo de produto</label><select id="newType" onchange="toggleNewPrice()"><option value="normal">Preço individual</option><option value="promo_item">Item promocional</option></select></div>
+<div class="field" id="newPriceField"><label for="newPrice">Preço (R$)</label><input id="newPrice" type="number" min="0.01" step="0.01" placeholder="Ex.: 20,00"></div>
+<div class="field"><label for="newQty">Quantidade disponível</label><input id="newQty" type="number" min="0" step="1" value="1"></div>
+</div>
+<div class="actions"><button class="primary" onclick="createProduct()">Cadastrar produto e estoque</button></div>
+<div id="newProductMessage"></div>
+</div>
 <p class="note">Os registros são compartilhados pelo Supabase entre dispositivos autenticados. Não compartilhe a senha. A chave pública está no código; a segurança depende das políticas do banco e da autenticação.</p>
 </section>
 </main><footer><div class="wrap">Bellustosa Feira3d · Catálogo com banco de dados Supabase</div></footer>
@@ -49,6 +62,26 @@ async function rpcSale(type,items){let {data,error}=await sb.rpc('register_sale'
 async function sellNormal(id){let p=products.find(x=>x.id===id);if(!p||p.current_stock<1)return;if(!confirm('Registrar venda de '+p.name+' por '+money(p.unit_price)+'?'))return;await rpcSale('normal',[{product_name:p.name,quantity:1}])}
 async function sellPromoSingle(){let p=products.find(x=>x.id===document.getElementById('singleProduct').value),q=Math.floor(Number(document.getElementById('singleQty').value));if(!p||!Number.isInteger(q)||q<1||q>2)return msg('A venda individual promocional aceita 1 ou 2 unidades. Para 3 unidades, use o combo de R$ 15,00.','error');if(q>p.current_stock)return msg('Estoque insuficiente para '+p.name+'.','error');if(!confirm('Registrar '+q+' × '+p.name+' por '+money(q*7)+'?'))return;await rpcSale('promo_single',[{product_name:p.name,quantity:q}])}
 async function sellCombo(){let ids=[document.getElementById('combo1').value,document.getElementById('combo2').value,document.getElementById('combo3').value];let names=ids.map(id=>products.find(p=>p.id===id)?.name);if(names.some(n=>!n))return msg('Selecione os três produtos do combo.','error');let counts={};names.forEach(n=>counts[n]=(counts[n]||0)+1);for(let [name,q] of Object.entries(counts)){let p=products.find(x=>x.name===name);if(p.current_stock<q)return msg('Estoque insuficiente para '+name+'. Disponível: '+p.current_stock+'.','error')}let summary=names.map(n=>'• '+n).join('\n');if(!confirm('Confirmar combo por R$ 15,00 com estes produtos?\n'+summary+'\nO estoque será reduzido de cada item.'))return;await rpcSale('promo_combo',Object.entries(counts).map(([product_name,quantity])=>({product_name,quantity})))}
+function toggleNewPrice(){document.getElementById('newPriceField').classList.toggle('hidden',document.getElementById('newType').value==='promo_item')}
+async function createProduct(){
+  const name=document.getElementById('newName').value.trim();
+  const category=document.getElementById('newCategory').value;
+  const type=document.getElementById('newType').value;
+  const price=Number(document.getElementById('newPrice').value);
+  const qty=Number(document.getElementById('newQty').value);
+  if(!name)return msg('Informe o nome do produto.','error','newProductMessage');
+  if(!Number.isInteger(qty)||qty<0)return msg('A quantidade deve ser um número inteiro igual ou maior que zero.','error','newProductMessage');
+  if(type==='normal'&&(!Number.isFinite(price)||price<=0))return msg('Informe um preço maior que zero.','error','newProductMessage');
+  if(products.some(p=>p.name.toLocaleLowerCase('pt-BR')===name.toLocaleLowerCase('pt-BR')))return msg('Já existe um produto com esse nome.','error','newProductMessage');
+  if(!confirm('Cadastrar "'+name+'" com '+qty+' unidade(s) de estoque?'))return;
+  const {data,error}=await sb.rpc('create_product_with_stock',{p_name:name,p_category:category,p_product_type:type,p_unit_price:type==='normal'?price:null,p_quantity:qty});
+  if(error)return msg('Produto não cadastrado: '+error.message,'error','newProductMessage');
+  document.getElementById('newName').value='';
+  document.getElementById('newPrice').value='';
+  document.getElementById('newQty').value='1';
+  msg('Produto cadastrado e salvo no banco de dados.','success','newProductMessage');
+  await refreshAll();
+}
 async function adjustStock(){let p=products.find(x=>x.id===document.getElementById('adjustProduct').value),change=Math.trunc(Number(document.getElementById('adjustQty').value)),note=document.getElementById('adjustNote').value.trim();if(!p||!Number.isInteger(change)||change===0)return msg('Informe um ajuste diferente de zero.','error');if(!confirm('Alterar estoque de '+p.name+' em '+(change>0?'+':'')+change+' unidade(s), sem alterar o faturamento?'))return;let {data,error}=await sb.rpc('adjust_stock',{p_product_name:p.name,p_change:change,p_note:note||null});if(error){msg('Ajuste não realizado: '+error.message,'error');return}msg('Estoque atualizado.','success');await refreshAll()}
 function exportCSV(){let rows=[['Data','Tipo','Produtos','Quantidade','Total'],...sales.map(s=>{let names=saleItems.filter(i=>i.sale_id===s.id).map(i=>(i.products?.name||'Produto')+' x'+i.quantity).join(' + ');return [s.created_at,s.sale_type,names,s.quantity,s.total_amount]})];let csv='\uFEFF'+rows.map(r=>r.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(';')).join('\r\n');let a=document.createElement('a'),u=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.href=u;a.download='relatorio_vendas_feira.csv';a.click();URL.revokeObjectURL(u)}
 document.getElementById('search').addEventListener('input',renderNormal);document.getElementById('sort').addEventListener('change',renderNormal);document.getElementById('singleQty').addEventListener('input',()=>document.getElementById('singleEstimate').textContent=money(Math.max(1,Number(document.getElementById('singleQty').value)||1)*7));
